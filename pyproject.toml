@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wu_tracker"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+license = "MIT"
+
+dependencies = [
+    "streamlit"
+]
+
+[project.scripts]
+run-dev-server = "wu_tracker.cli:main"
