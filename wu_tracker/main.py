@@ -5,6 +5,7 @@ import pandas as pd
 from contextlib import closing
 import os
 import hashlib
+import secrets
 
 DB_PATH = "backoffice.db"
 
@@ -125,6 +126,63 @@ def get_user_by_username(username: str):
             (username,),
         ).fetchone()
     return row
+
+
+def get_all_users():
+    conn = get_connection()
+    with closing(conn):
+        rows = conn.execute("SELECT id, username, full_name, is_admin FROM users ORDER BY username;").fetchall()
+    return rows
+
+
+def get_admin_count() -> int:
+    conn = get_connection()
+    with closing(conn):
+        row = conn.execute("SELECT COUNT(*) AS cnt FROM users WHERE is_admin = 1;").fetchone()
+    return row["cnt"] if row else 0
+
+
+def delete_user(user_id: int):
+    # Prevent deleting the last admin
+    conn = get_connection()
+    with closing(conn):
+        is_admin_row = conn.execute("SELECT is_admin FROM users WHERE id = ?;", (user_id,)).fetchone()
+        if is_admin_row and is_admin_row["is_admin"]:
+            admin_count = conn.execute("SELECT COUNT(*) AS cnt FROM users WHERE is_admin = 1;").fetchone()["cnt"]
+            if admin_count <= 1:
+                raise ValueError("Cannot delete the last admin user.")
+
+        conn.execute("DELETE FROM users WHERE id = ?;", (user_id,))
+        conn.commit()
+
+
+def update_user(user_id: int, username: str, full_name: str, is_admin: int):
+    # Prevent demoting last admin
+    conn = get_connection()
+    with closing(conn):
+        cur = conn.execute("SELECT is_admin FROM users WHERE id = ?;", (user_id,)).fetchone()
+        if cur and cur["is_admin"] and not is_admin:
+            admin_count = conn.execute("SELECT COUNT(*) AS cnt FROM users WHERE is_admin = 1;").fetchone()["cnt"]
+            if admin_count <= 1:
+                raise ValueError("Cannot remove admin privileges from the last admin user.")
+
+        conn.execute(
+            "UPDATE users SET username = ?, full_name = ?, is_admin = ? WHERE id = ?;",
+            (username, full_name, int(is_admin), user_id),
+        )
+        conn.commit()
+
+
+def reset_user_password(user_id: int, new_password: str | None = None) -> str:
+    # If new_password is None, generate a temporary password and return it
+    if new_password is None:
+        new_password = secrets.token_urlsafe(10)
+    pw_hash = hash_password(new_password)
+    conn = get_connection()
+    with closing(conn):
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?;", (pw_hash, user_id))
+        conn.commit()
+    return new_password
 
 
 def get_users_count() -> int:
@@ -905,6 +963,76 @@ def admin_task_types_tab():
                 st.success(f"Updated WU for {t['name']}")
 
 
+def admin_users_tab():
+    st.subheader("Manage Users")
+
+    st.markdown("### Create a new user (admin only)")
+    with st.form("create_user_form"):
+        username = st.text_input("Username")
+        full_name = st.text_input("Full name")
+        password = st.text_input("Password", type="password")
+        is_admin_flag = st.checkbox("Grant admin privileges", value=False)
+        submitted = st.form_submit_button("Create user")
+
+    if submitted:
+        if not username.strip() or not full_name.strip() or not password:
+            st.error("All fields are required to create a user.")
+        elif get_user_by_username(username.strip()) is not None:
+            st.error("Username already exists.")
+        else:
+            try:
+                conn_user = get_users_count()  # just to ensure DB exists
+                create_user(username.strip(), full_name.strip(), password)
+                # if admin flag was requested and the created user is not admin by default, set it
+                user = get_user_by_username(username.strip())
+                if is_admin_flag and user and not user["is_admin"]:
+                    update_user(user["id"], user["username"], user["full_name"], 1)
+                st.success("User created.")
+            except Exception as e:
+                st.error(f"Error creating user: {e}")
+
+    st.markdown("### Existing users")
+    users = get_all_users()
+    if not users:
+        st.info("No users found.")
+        return
+
+    for u in users:
+        cols = st.columns([2, 3, 1, 1, 1])
+        with cols[0]:
+            username_val = st.text_input("Username", value=u["username"], key=f"username_{u['id']}")
+        with cols[1]:
+            full_name_val = st.text_input("Full name", value=u["full_name"], key=f"fullname_{u['id']}")
+        with cols[2]:
+            is_admin_val = st.checkbox("Admin", value=bool(u["is_admin"]), key=f"isadmin_{u['id']}")
+        with cols[3]:
+            if st.button("Save", key=f"save_user_{u['id']}"):
+                try:
+                    update_user(u["id"], username_val.strip(), full_name_val.strip(), int(bool(is_admin_val)))
+                    st.success("User updated.")
+                except Exception as e:
+                    st.error(f"Could not update user: {e}")
+        with cols[4]:
+            if st.button("Reset password", key=f"reset_pw_{u['id']}"):
+                try:
+                    new_pw = reset_user_password(u["id"], None)
+                    st.success(f"Password reset. Temporary password: {new_pw}")
+                except Exception as e:
+                    st.error(f"Could not reset password: {e}")
+
+        # Delete control below row to avoid accidental taps
+        delete_key = f"delete_user_{u['id']}"
+        if st.button("Delete", key=delete_key):
+            # ask for confirmation in-place
+            confirm = st.checkbox("Confirm delete", key=f"confirm_{u['id']}")
+            if confirm:
+                try:
+                    delete_user(u["id"])
+                    st.success("User deleted. Refresh to update list.")
+                except Exception as e:
+                    st.error(f"Could not delete user: {e}")
+
+
 def admin_reports_tab():
     st.subheader("Workload & Pricing Reports")
 
@@ -993,13 +1121,15 @@ def admin_view(user):
         st.error("You do not have admin permissions.")
         return
 
-    tabs = st.tabs(["Clients", "Task Types & WU", "Reports"])
+    tabs = st.tabs(["Users", "Clients", "Task Types & WU", "Reports"])
 
     with tabs[0]:
-        admin_clients_tab()
+        admin_users_tab()
     with tabs[1]:
-        admin_task_types_tab()
+        admin_clients_tab()
     with tabs[2]:
+        admin_task_types_tab()
+    with tabs[3]:
         admin_reports_tab()
 
 
