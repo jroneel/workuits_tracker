@@ -1,6 +1,6 @@
 import streamlit as st
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import pandas as pd
 from contextlib import closing
 import os
@@ -323,6 +323,27 @@ def get_recent_logs(limit=20, employee_id=None):
             ).fetchall()
     return rows
 
+
+def get_logs_by_timeframe(start:datetime|str, end=None):
+    
+    if isinstance(start, datetime):
+        start = start.strftime('%Y-%m-%d %H:%M:%S')
+    
+    conn = get_connection()
+    with closing(conn):
+        stmt = (
+            f"""
+            SELECT tl.*, c.name AS client_name, tt.name AS task_type_name
+            FROM task_logs tl
+            JOIN users ON tl.employee_id = users.id
+            JOIN clients c ON tl.client_id = c.id
+            JOIN task_types tt ON tl.task_type_id = tt.id
+            WHERE tl.log_date > '{start}'
+            ORDER BY tl.created_at DESC
+            """)
+        df = pd.read_sql(stmt, conn)
+    
+    return df
 
 def get_aggregated_wu(start_date=None, end_date=None, client_id=None):
     conn = get_connection()
@@ -1084,7 +1105,7 @@ def admin_reports_tab():
 
     st.markdown("### Open items waiting on clients")
 
-    blockers = get_all_open_blockers()
+    blockers = get_open_blockers()
     if not blockers:
         st.info("No open client-dependent items. 🎉")
         return
@@ -1113,6 +1134,33 @@ def admin_reports_tab():
                 resolve_blocker(b["id"])
                 st.success("Marked as resolved. It will disappear after the next refresh.")
 
+def admin_logs_tab():
+    st.subheader("All Logged Tasks")
+    
+    columns = st.columns(3)
+    
+    with columns[0]:
+        logs_since_dt = st.datetime_input(
+            "Logs Since", 
+            value=datetime.now()-timedelta(weeks=2), 
+            key='logs_since_dt',
+            )
+    logs = get_logs_by_timeframe(logs_since_dt)
+    
+    logs = logs[['employee_name', 'log_date', 'client_name', 'task_type_name', 'notes', 'wu_total']]
+
+    logs.rename({'employee_name': 'Employee',
+                'log_date': 'Date',
+                'client_name': 'Client',
+                'task_type_name': 'Task',
+                'wu_total': 'Total WU',
+                'notes': 'Notes'})
+    
+    st.dataframe(logs)
+
+def admin_leaderboard():
+    st.subheader("Weekly Leaderboard")
+
 
 def admin_view(user):
     st.header("Admin – Configuration & Reporting")
@@ -1121,7 +1169,7 @@ def admin_view(user):
         st.error("You do not have admin permissions.")
         return
 
-    tabs = st.tabs(["Users", "Clients", "Task Types & WU", "Reports"])
+    tabs = st.tabs(["Users", "Clients", "Task Types & WU", "Reports", "Logged Tasks", "Leaderboard"])
 
     with tabs[0]:
         admin_users_tab()
@@ -1131,6 +1179,10 @@ def admin_view(user):
         admin_task_types_tab()
     with tabs[3]:
         admin_reports_tab()
+    with tabs[4]:
+        admin_logs_tab()
+    with tabs[5]:
+        admin_leaderboard()
 
 
 # ---------- MAIN APP ----------
