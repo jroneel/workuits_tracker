@@ -604,7 +604,7 @@ def resolve_blocker(blocker_id):
         conn.commit()
 
 def blocks_view(user):
-    st.header("Waiting Blocks – Client Deliverables")
+    st.header("Waiting Blocks")
 
     clients = get_clients(active_only=True)
     if not clients:
@@ -612,8 +612,6 @@ def blocks_view(user):
         return
 
     client_map = {c["name"]: c["id"] for c in clients}
-
-    st.subheader("Add a new waiting block")
 
     with st.form("add_blocker_form"):
         client_label = st.selectbox("Client", list(client_map.keys()))
@@ -626,11 +624,11 @@ def blocks_view(user):
             placeholder="e.g. Requested via email, they said they would send by Friday."
         )
         requested_date = st.date_input("Requested date", value=date.today())
-        due_date = st.date_input(
-            "Desired due date (optional)",
-            value=date.today()
-        )
-        use_due_date = st.checkbox("Use due date", value=False)
+        # due_date = st.date_input(
+        #     "Desired due date (optional)",
+        #     value=date.today()
+        # )
+        # use_due_date = st.checkbox("Use due date", value=False)
 
         submitted = st.form_submit_button("Add waiting block")
 
@@ -640,14 +638,14 @@ def blocks_view(user):
             else:
                 client_id = client_map[client_label]
                 requested_at_str = datetime.combine(requested_date, datetime.min.time()).isoformat()
-                due_date_str = datetime.combine(due_date, datetime.min.time()).isoformat() if use_due_date else None
+                # due_date_str = datetime.combine(due_date, datetime.min.time()).isoformat() if use_due_date else None
 
                 create_client_blocker(
                     client_id=client_id,
                     title=title.strip(),
                     details=details.strip() if details else None,
                     requested_at=requested_at_str,
-                    due_date=due_date_str,
+                    due_date=None,
                     created_by=user["id"],
                 )
                 st.success("Waiting block added ✅")
@@ -1190,21 +1188,21 @@ def main():
         mode = st.sidebar.radio(
             "Choose view",
             [
-                "Employee - Log Tasks",
-                "Waiting Blocks - Client Deliverables",
-                "Admin - Manage & Reports",
+                "Log Tasks",
+                "Waiting Blocks",
+                "Admin",
             ],
         )
     else:
         mode = st.sidebar.radio(
             "Choose view",
             [
-                "Employee - Log Tasks",
-                "Waiting Blocks - Client Deliverables",
+                "Log Tasks",
+                "Waiting Blocks",
             ],
         )
 
-    if mode.startswith("Employee"):
+    if mode.startswith("Log Tasks"):
         employee_view(user)
     elif mode.startswith("Waiting Blocks"):
         blocks_view(user)
