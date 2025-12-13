@@ -782,7 +782,7 @@ def signup_form():
 # ---------- UI: EMPLOYEE VIEW ----------
 
 def employee_view(user):
-    st.header("Employee – Log Work")
+    st.header("Log Work")
 
     # Use account full_name as employee name
     employee_name = user["full_name"]
@@ -816,9 +816,15 @@ def employee_view(user):
         log_datetime = datetime.combine(work_date, work_time)
         log_datetime_str = log_datetime.isoformat()
 
-        client_label = st.selectbox("Client", list(client_map.keys()))
-        task_label = st.selectbox("Task type", list(task_map.keys()))
-        quantity = st.number_input("Quantity (e.g., 10 transactions, 3 calls)", min_value=0.0, step=1.0, value=1.0)
+        row2 = st.columns(3)
+
+        with row2[0]:
+            client_label = st.selectbox("Client", list(client_map.keys()))
+        with row2[1]:
+            task_label = st.selectbox("Task type", list(task_map.keys()))
+        with row2[2]:
+            quantity = st.number_input("Quantity (e.g., 10 transactions, 3 calls)", min_value=0.0, step=1.0, value=1.0)
+        
         notes = st.text_area("Notes (optional)", placeholder="e.g. Reconciled 3 accounts and followed up with vendor X.")
 
         client_id = client_map[client_label]
@@ -827,30 +833,6 @@ def employee_view(user):
         wu_total = wu_per_unit * quantity
 
         st.caption(f"Calculated Work Units for this log: **{wu_total:.2f} WU**")
-
-        st.markdown("### Client dependency (optional)")
-        waiting_on_client = st.checkbox("This work is now waiting on the client for something")
-
-        blocker_title = None
-        blocker_details = None
-        blocker_due_str = None
-
-        if waiting_on_client:
-            blocker_title = st.text_input(
-                "What are you waiting on?",
-                placeholder="e.g. Bank statements for March, updated driver list, signed engagement letter"
-            )
-            blocker_details = st.text_area(
-                "Additional details (optional)",
-                placeholder="e.g. Requested via email on 3/1, they said they'll send by Friday."
-            )
-            blocker_due_date = st.date_input(
-                "When do you ideally need this by?",
-                value=date.today()
-            )
-            blocker_due_str = blocker_due_date.isoformat()
-        else:
-            blocker_due_str = None
 
         submitted = st.form_submit_button("Save log")
         if submitted:
@@ -865,17 +847,6 @@ def employee_view(user):
                 wu_total=wu_total,
                 notes=notes.strip() if notes else None,
             )
-
-            # Optionally create a blocker
-            if waiting_on_client and blocker_title and blocker_title.strip():
-                create_client_blocker(
-                    client_id=client_id,
-                    title=blocker_title.strip(),
-                    details=blocker_details.strip() if blocker_details else None,
-                    requested_at=datetime.now().isoformat(),
-                    due_date=blocker_due_str,
-                    created_by=employee_id,
-                )
 
             st.success("Task log saved ✅")
 
