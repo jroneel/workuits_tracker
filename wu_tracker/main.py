@@ -7,6 +7,9 @@ import os
 import hashlib
 import secrets
 
+from wu_tracker.data_funcs.update_task import update_task
+from wu_tracker.widgets.edit_log import edit_log
+
 DB_PATH = "backoffice.db"
 
 # ---------- PASSWORD HASHING ----------
@@ -291,7 +294,6 @@ def insert_task_log(log_date, employee_name, employee_id, client_id, task_type_i
             (log_date, employee_name, employee_id, client_id, task_type_id, quantity, wu_total, notes),
         )
         conn.commit()
-
 
 def get_recent_logs(limit=20, employee_id=None):
     conn = get_connection()
@@ -828,29 +830,6 @@ def employee_view(user):
 
         st.caption(f"Calculated Work Units for this log: **{wu_total:.2f} WU**")
 
-        st.markdown("### Client dependency (optional)")
-        waiting_on_client = st.checkbox("This work is now waiting on the client for something")
-
-        blocker_title = None
-        blocker_details = None
-        blocker_due_str = None
-
-        if waiting_on_client:
-            blocker_title = st.text_input(
-                "What are you waiting on?",
-                placeholder="e.g. Bank statements for March, updated driver list, signed engagement letter"
-            )
-            blocker_details = st.text_area(
-                "Additional details (optional)",
-                placeholder="e.g. Requested via email on 3/1, they said they'll send by Friday."
-            )
-            blocker_due_date = st.date_input(
-                "When do you ideally need this by?",
-                value=date.today()
-            )
-            blocker_due_str = blocker_due_date.isoformat()
-        else:
-            blocker_due_str = None
 
         submitted = st.form_submit_button("Save log")
         if submitted:
@@ -866,37 +845,46 @@ def employee_view(user):
                 notes=notes.strip() if notes else None,
             )
 
-            # Optionally create a blocker
-            if waiting_on_client and blocker_title and blocker_title.strip():
-                create_client_blocker(
-                    client_id=client_id,
-                    title=blocker_title.strip(),
-                    details=blocker_details.strip() if blocker_details else None,
-                    requested_at=datetime.now().isoformat(),
-                    due_date=blocker_due_str,
-                    created_by=employee_id,
-                )
-
             st.success("Task log saved ✅")
 
     st.subheader("Your recent logs")
     logs = get_recent_logs(employee_id=employee_id, limit=20)
     if logs:
         df = pd.DataFrame([dict(r) for r in logs])
-        df_view = df[["created_at", "log_date", "client_name", "task_type_name", "quantity", "wu_total", "notes"]]
+        df_view = df[["created_at", "log_date", "client_name", "task_type_name", "quantity", "wu_total", "notes"]].copy()
         df_view.rename(
             columns={
-                "created_at": "Logged at",
-                "log_date": "Date",
-                "client_name": "Client",
-                "task_type_name": "Task",
-                "quantity": "Qty",
-                "wu_total": "WU",
-                "notes": "Notes",
+            "created_at": "Logged at",
+            "log_date": "Date",
+            "client_name": "Client",
+            "task_type_name": "Task",
+            "quantity": "Qty",
+            "wu_total": "WU",
+            "notes": "Notes",
             },
             inplace=True,
         )
-        st.dataframe(df_view, width='stretch')
+        # Render rows with an inline action button for each row
+        for _, r in df.iterrows():
+            cols = st.columns([4, 1, 1, 1])
+            with cols[0]:
+                st.write(f"**{r['log_date']}** — {r['client_name']} — {r['task_type_name']}")
+                if r.get('notes'):
+                    st.caption(r['notes'])
+            with cols[1]:
+                st.write(f"Qty: {r['quantity']}")
+            with cols[2]:
+                try:
+                    st.write(f"WU: {float(r['wu_total']):.2f}")
+                except Exception:
+                    st.write(f"WU: {r['wu_total']}")
+            with cols[3]:
+                st.button("Select", key=f"select_log_{r['id']}", on_click=edit_log, args=[r['id']])
+                
+                # if st.button("Select", key=f"select_log_{r['id']}"):
+                #     st.session_state['selected_log'] = int(r['id'])
+                #     st.success(f"Selected log id {r['id']}")
+                    
     else:
         st.info("No logs yet. Submit your first one above.")
 
@@ -1161,6 +1149,32 @@ def admin_logs_tab():
 def admin_leaderboard():
     st.subheader("Weekly Leaderboard")
 
+    columns = st.columns(3)
+    
+    with columns[0]:
+        leaderboard_ww = st.number_input(
+            "Select Workweek", 
+            value=int((datetime.now().strftime('%G%V'))),
+            min_value=202501,
+            max_value=int((datetime.now().strftime('%G%V'))),
+            key='leaderboard_ww',
+            )
+    
+    leaderboard_dt = datetime.strptime(str(leaderboard_ww)+'0', '%G%V%w')
+    
+    logs = get_logs_by_timeframe(start=leaderboard_dt,
+                                 end=leaderboard_dt+timedelta(days=7))
+    
+    logs = logs[['employee_name', 'log_date', 'client_name', 'task_type_name', 'notes', 'wu_total']]
+
+    logs.rename({'employee_name': 'Employee',
+                'log_date': 'Date',
+                'client_name': 'Client',
+                'task_type_name': 'Task',
+                'wu_total': 'Total WU',
+                'notes': 'Notes'})
+    
+    st.dataframe(logs)
 
 def admin_view(user):
     st.header("Admin – Configuration & Reporting")
@@ -1169,7 +1183,8 @@ def admin_view(user):
         st.error("You do not have admin permissions.")
         return
 
-    tabs = st.tabs(["Users", "Clients", "Task Types & WU", "Reports", "Logged Tasks", "Leaderboard"])
+    tabs = st.tabs(["Users", "Clients", "Task Types & WU", "Reports", "All Logs",
+                    "Leaderboard"])
 
     with tabs[0]:
         admin_users_tab()
@@ -1219,21 +1234,21 @@ def main():
         mode = st.sidebar.radio(
             "Choose view",
             [
-                "Employee - Log Tasks",
-                "Waiting Blocks - Client Deliverables",
-                "Admin - Manage & Reports",
+                "Log Tasks",
+                "Waiting Blocks",
+                "Admin",
             ],
         )
     else:
         mode = st.sidebar.radio(
             "Choose view",
             [
-                "Employee - Log Tasks",
-                "Waiting Blocks - Client Deliverables",
+                "Log Tasks",
+                "Waiting Blocks",
             ],
         )
 
-    if mode.startswith("Employee"):
+    if mode.startswith("Log Tasks"):
         employee_view(user)
     elif mode.startswith("Waiting Blocks"):
         blocks_view(user)
