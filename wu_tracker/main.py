@@ -385,7 +385,77 @@ def get_aggregated_wu(start_date=None, end_date=None, client_id=None):
         )
     return df
 
-from datetime import datetime  # you probably already have this at top
+def create_client_blocker(client_id, title, details, requested_at, due_date, created_by):
+    conn = get_connection()
+    with closing(conn):
+        conn.execute(
+            """
+            INSERT INTO client_blockers (
+                client_id, title, details,
+                requested_at, due_date,
+                status, created_by
+            )
+            VALUES (?, ?, ?, ?, ?, 'open', ?);
+            """,
+            (
+                client_id,
+                title,
+                details,
+                requested_at,
+                due_date,
+                created_by,
+            ),
+        )
+        conn.commit()
+
+
+def get_open_blockers():
+    conn = get_connection()
+    with closing(conn):
+        rows = conn.execute(
+            """
+            SELECT cb.*, c.name AS client_name, u.full_name AS created_by_name
+            FROM client_blockers cb
+            JOIN clients c ON cb.client_id = c.id
+            LEFT JOIN users u ON cb.created_by = u.id
+            WHERE cb.status = 'open'
+            ORDER BY c.name, cb.requested_at ASC;
+            """
+        ).fetchall()
+    return rows
+
+
+def get_resolved_blockers(limit=50):
+    conn = get_connection()
+    with closing(conn):
+        rows = conn.execute(
+            """
+            SELECT cb.*, c.name AS client_name, u.full_name AS created_by_name
+            FROM client_blockers cb
+            JOIN clients c ON cb.client_id = c.id
+            LEFT JOIN users u ON cb.created_by = u.id
+            WHERE cb.status = 'resolved'
+            ORDER BY cb.resolved_at DESC
+            LIMIT ?;
+            """,
+            (limit,),
+        ).fetchall()
+    return rows
+
+
+def resolve_blocker(blocker_id):
+    conn = get_connection()
+    with closing(conn):
+        conn.execute(
+            """
+            UPDATE client_blockers
+            SET status = 'resolved',
+                resolved_at = datetime('now')
+            WHERE id = ?;
+            """,
+            (blocker_id,),
+        )
+        conn.commit()
 
 def create_client_blocker(client_id, title, details, requested_at, due_date, created_by):
     conn = get_connection()
@@ -458,80 +528,6 @@ def resolve_blocker(blocker_id):
             (blocker_id,),
         )
         conn.commit()
-from datetime import datetime  # you probably already have this at top
-
-def create_client_blocker(client_id, title, details, requested_at, due_date, created_by):
-    conn = get_connection()
-    with closing(conn):
-        conn.execute(
-            """
-            INSERT INTO client_blockers (
-                client_id, title, details,
-                requested_at, due_date,
-                status, created_by
-            )
-            VALUES (?, ?, ?, ?, ?, 'open', ?);
-            """,
-            (
-                client_id,
-                title,
-                details,
-                requested_at,
-                due_date,
-                created_by,
-            ),
-        )
-        conn.commit()
-
-
-def get_open_blockers():
-    conn = get_connection()
-    with closing(conn):
-        rows = conn.execute(
-            """
-            SELECT cb.*, c.name AS client_name, u.full_name AS created_by_name
-            FROM client_blockers cb
-            JOIN clients c ON cb.client_id = c.id
-            LEFT JOIN users u ON cb.created_by = u.id
-            WHERE cb.status = 'open'
-            ORDER BY c.name, cb.requested_at ASC;
-            """
-        ).fetchall()
-    return rows
-
-
-def get_resolved_blockers(limit=50):
-    conn = get_connection()
-    with closing(conn):
-        rows = conn.execute(
-            """
-            SELECT cb.*, c.name AS client_name, u.full_name AS created_by_name
-            FROM client_blockers cb
-            JOIN clients c ON cb.client_id = c.id
-            LEFT JOIN users u ON cb.created_by = u.id
-            WHERE cb.status = 'resolved'
-            ORDER BY cb.resolved_at DESC
-            LIMIT ?;
-            """,
-            (limit,),
-        ).fetchall()
-    return rows
-
-
-def resolve_blocker(blocker_id):
-    conn = get_connection()
-    with closing(conn):
-        conn.execute(
-            """
-            UPDATE client_blockers
-            SET status = 'resolved',
-                resolved_at = datetime('now')
-            WHERE id = ?;
-            """,
-            (blocker_id,),
-        )
-        conn.commit()
-from datetime import datetime  # you probably already have this at top
 
 def create_client_blocker(client_id, title, details, requested_at, due_date, created_by):
     conn = get_connection()
@@ -626,11 +622,6 @@ def blocks_view(user):
             placeholder="e.g. Requested via email, they said they would send by Friday."
         )
         requested_date = st.date_input("Requested date", value=date.today())
-        # due_date = st.date_input(
-        #     "Desired due date (optional)",
-        #     value=date.today()
-        # )
-        # use_due_date = st.checkbox("Use due date", value=False)
 
         submitted = st.form_submit_button("Add waiting block")
 
@@ -640,7 +631,6 @@ def blocks_view(user):
             else:
                 client_id = client_map[client_label]
                 requested_at_str = datetime.combine(requested_date, datetime.min.time()).isoformat()
-                # due_date_str = datetime.combine(due_date, datetime.min.time()).isoformat() if use_due_date else None
 
                 create_client_blocker(
                     client_id=client_id,
@@ -1139,16 +1129,37 @@ def admin_logs_tab():
             )
     logs = get_logs_by_timeframe(logs_since_dt)
     
-    logs = logs[['employee_name', 'log_date', 'client_name', 'task_type_name', 'notes', 'wu_total']]
-
-    logs.rename({'employee_name': 'Employee',
-                'log_date': 'Date',
-                'client_name': 'Client',
-                'task_type_name': 'Task',
-                'wu_total': 'Total WU',
-                'notes': 'Notes'})
-    
-    st.dataframe(logs)
+    if not logs.empty:
+        logs.rename(
+            columns={
+            "created_at": "Logged at",
+            "log_date": "Date",
+            "client_name": "Client",
+            "task_type_name": "Task",
+            "quantity": "Qty",
+            "wu_total": "WU",
+            "notes": "Notes",
+            },
+            inplace=True,
+        )
+        # Render rows with an inline action button for each row
+        for _, r in logs.iterrows():
+            cols = st.columns([3, 2,  1, 1, 1])
+            with cols[0]:
+                st.write(f"**{r['Date']}** — {r['Client']} — {r['Task']}")
+                if r.get('Notes'):
+                    st.caption(r['Notes'])
+            with cols[1]:
+                st.write(f"{r['employee_name']}")
+            with cols[2]:
+                st.write(f"Qty: {r['Qty']}")
+            with cols[3]:
+                try:
+                    st.write(f"WU: {float(r['WU']):.2f}")
+                except Exception:
+                    st.write(f"WU: {r['WU']}")
+            with cols[4]:
+                st.button("Select", key=f"select_log_{r['id']}", on_click=edit_log, args=[r['id']])
 
 def admin_leaderboard():
     st.subheader("Weekly Leaderboard")
