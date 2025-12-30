@@ -1109,8 +1109,8 @@ def admin_reports_tab():
             if b["details"]:
                 st.write("**Details:**")
                 st.write(b["details"])
-            if b["followup_count"] is not None and b["followup_count"] > 0:
-                st.write(f"**Follow-ups:** {b['followup_count']} (last: {b['last_followup_at']})")
+            # if b["followup_count"] is not None and b["followup_count"] > 0:
+            #     st.write(f"**Follow-ups:** {b['followup_count']} (last: {b['last_followup_at']})")
 
             if st.button("Mark as resolved", key=f"resolve_blocker_{b['id']}"):
                 resolve_blocker(b["id"])
